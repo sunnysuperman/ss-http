@@ -145,13 +145,7 @@ public class HttpClient {
             response = execute(request);
             return new HttpTextResult(response.code(), response.body().string());
         } finally {
-            if (response != null) {
-                try {
-                    response.close();
-                } catch (Exception ex) {
-                    // ignore
-                }
-            }
+            FileUtil.close(response);
         }
     }
 
@@ -251,9 +245,10 @@ public class HttpClient {
             options = DEFAULT_DOWNLOAD_OPTIONS;
         }
         Request request = getRequestBuilder(url, options.getParams(), options.getHeaders());
-        Response response = execute(request);
+        Response response = null;
         InputStream in = null;
         try {
+            response = execute(request);
             if (options.getMaxSize() > 0) {
                 long length = FormatUtil.parseLongValue(response.header("Content-Length"), -1);
                 if (length < 0 || length > options.getMaxSize()) {
@@ -277,6 +272,25 @@ public class HttpClient {
         } finally {
             FileUtil.close(in);
             FileUtil.close(out);
+            FileUtil.close(response);
+        }
+    }
+
+    public long getContentLength(String url, Map<String, ?> params, Map<String, ?> headers) throws IOException {
+        Request.Builder reqBuilder = new Request.Builder().url(getUrl(url, params));
+        if (headers != null) {
+            for (Entry<String, ?> entry : headers.entrySet()) {
+                reqBuilder.addHeader(entry.getKey(), entry.getValue().toString());
+            }
+        }
+        Request request = reqBuilder.head().build();
+        Response response = null;
+        try {
+            response = execute(request);
+            long length = response.body().contentLength();
+            return length;
+        } finally {
+            FileUtil.close(response);
         }
     }
 
