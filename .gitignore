@@ -6,9 +6,9 @@
 /.project
 /.settings/
 
-#virtual machine crash logs
-hs_err_pid*
+#idea
+/.idea
+*.iml
 
-#test
-/src/test/resources/test-resources/test.properties
-/src/test/resources/test-resources/security
+# virtual machine crash logs
+hs_err_pid*
