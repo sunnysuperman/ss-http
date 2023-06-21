@@ -1,17 +1,36 @@
 package com.sunnysuperman.http.client;
 
-public class HttpTextResult {
-	int code;
-	String body;
+import java.util.List;
+import java.util.Map;
 
-	public HttpTextResult(int code, String body) {
+import okhttp3.Headers;
+
+public class HttpTextResult {
+	private int code;
+	private String body;
+	private Headers headers;
+	private Map<String, List<String>> headersMap;
+
+	public HttpTextResult(int code, String body, Headers headers) {
 		super();
 		this.code = code;
 		this.body = body;
+		this.headers = headers;
 	}
 
 	public boolean ok() {
 		return code == 200;
+	}
+
+	public String getHeader(String name) {
+		return headers.get(name);
+	}
+
+	public Map<String, List<String>> getHeaders() {
+		if (headersMap == null) {
+			headersMap = headers.toMultimap();
+		}
+		return headersMap;
 	}
 
 	public int getCode() {

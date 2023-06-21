@@ -5,12 +5,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
+import java.lang.reflect.UndeclaredThrowableException;
 import java.net.Proxy;
 import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 import com.sunnysuperman.commons.util.FileUtil;
@@ -35,17 +37,21 @@ import okhttp3.Response;
 public class HttpClient {
 	private static final HttpDownloadOptions DEFAULT_DOWNLOAD_OPTIONS = new HttpDownloadOptions();
 
-	private final byte[] CLIENT_LOCK = new byte[0];
 	private int connectTimeout = 15;
 	private int readTimeout = 20;
 	private ConnectionPool connectionPool;
 	private Proxy proxy;
 	private Authenticator proxyAuthenticator;
 	private OkHttpClient client;
+	private volatile boolean destroyed;
 
 	public HttpClient(int maxIdleConnections, long keepAliveDuration) {
 		super();
 		this.connectionPool = new ConnectionPool(maxIdleConnections, keepAliveDuration, TimeUnit.SECONDS);
+	}
+
+	public HttpClient(int maxIdleConnections) {
+		this(maxIdleConnections, 50);
 	}
 
 	@Deprecated
@@ -98,59 +104,12 @@ public class HttpClient {
 		this.proxyAuthenticator = proxyAuthenticator;
 	}
 
-	private String getUrl(String url, Map<String, ?> params) {
-		if (params == null) {
-			return url;
-		}
-		StringBuilder urlBuf = new StringBuilder(url);
-		boolean appendQuestionMark = url.indexOf('?') < 0;
-		for (Entry<String, ?> entry : params.entrySet()) {
-			if (appendQuestionMark) {
-				urlBuf.append('?');
-				appendQuestionMark = false;
-			} else {
-				urlBuf.append('&');
+	public void destroy() {
+		synchronized (this) {
+			if (client != null) {
+				client.connectionPool().evictAll();
+				destroyed = true;
 			}
-			try {
-				urlBuf.append(entry.getKey()).append('=')
-						.append(URLEncoder.encode(entry.getValue().toString(), StringUtil.UTF8));
-			} catch (UnsupportedEncodingException e) {
-				throw new RuntimeException(e);
-			}
-		}
-		String getUrl = urlBuf.toString();
-		return getUrl;
-	}
-
-	private Request getRequestBuilder(String url, Map<String, ?> params, Map<String, ?> headers) {
-		Request.Builder builder = new Request.Builder().url(getUrl(url, params));
-		if (headers != null) {
-			for (Entry<String, ?> entry : headers.entrySet()) {
-				builder.addHeader(entry.getKey(), entry.getValue().toString());
-			}
-		}
-		return builder.build();
-	}
-
-	private Response execute(Request request) throws IOException {
-		if (client == null) {
-			synchronized (CLIENT_LOCK) {
-				if (client == null) {
-					client = createClient();
-				}
-			}
-		}
-		Response response = client.newCall(request).execute();
-		return response;
-	}
-
-	private HttpTextResult executeAndGetTextResult(Request request) throws IOException {
-		Response response = null;
-		try {
-			response = execute(request);
-			return new HttpTextResult(response.code(), response.body().string());
-		} finally {
-			FileUtil.close(response);
 		}
 	}
 
@@ -163,30 +122,16 @@ public class HttpClient {
 		return get(url, null, null);
 	}
 
-	private void appendHeaders(Request.Builder builder, Map<String, ?> headers) {
-		if (headers == null || headers.isEmpty()) {
-			return;
-		}
-		for (Entry<String, ?> entry : headers.entrySet()) {
-			builder.addHeader(entry.getKey(), FormatUtil.parseString(entry.getValue(), StringUtil.EMPTY));
-		}
-	}
-
-	private void appendFormBody(FormBody.Builder builder, Map<String, ?> params) {
-		if (params == null) {
-			return;
-		}
-		for (Entry<String, ?> entry : params.entrySet()) {
-			builder.add(entry.getKey(), FormatUtil.parseString(entry.getValue(), StringUtil.EMPTY));
-		}
-	}
-
 	public HttpTextResult post(String url, Map<String, ?> params, Map<String, ?> headers) throws IOException {
 		Request.Builder builder = new Request.Builder().url(url);
 		appendHeaders(builder, headers);
 
 		FormBody.Builder bodyBuilder = new FormBody.Builder();
-		appendFormBody(bodyBuilder, params);
+		if (params != null) {
+			for (Entry<String, ?> entry : params.entrySet()) {
+				bodyBuilder.add(entry.getKey(), FormatUtil.parseString(entry.getValue(), StringUtil.EMPTY));
+			}
+		}
 
 		Request request = builder.post(bodyBuilder.build()).build();
 		return executeAndGetTextResult(request);
@@ -197,6 +142,7 @@ public class HttpClient {
 		appendHeaders(builder, headers);
 
 		RequestBody requestBody = RequestBody.create(MediaType.parse(mediaType), body);
+
 		Request request = builder.post(requestBody).build();
 		return executeAndGetTextResult(request);
 	}
@@ -210,8 +156,9 @@ public class HttpClient {
 		appendHeaders(builder, headers);
 
 		MultipartBody.Builder bodyBuilder = new MultipartBody.Builder().setType(MultipartBody.FORM);
-		for (String key : body.keySet()) {
-			Object value = body.get(key);
+		for (Entry<String, ?> entry : body.entrySet()) {
+			String key = entry.getKey();
+			Object value = entry.getValue();
 			if (value == null) {
 				value = StringUtil.EMPTY;
 			}
@@ -286,11 +233,18 @@ public class HttpClient {
 		Response response = null;
 		try {
 			response = execute(request);
-			long length = response.body().contentLength();
-			return length;
+			return response.body().contentLength();
 		} finally {
 			FileUtil.close(response);
 		}
+	}
+
+	public int idleConnectionCount() {
+		return connectionPool.idleConnectionCount();
+	}
+
+	public int connectionCount() {
+		return connectionPool.connectionCount();
 	}
 
 	private OkHttpClient createClient() {
@@ -302,18 +256,79 @@ public class HttpClient {
 		if (proxyAuthenticator != null) {
 			builder.proxyAuthenticator(proxyAuthenticator);
 		}
-		if (connectionPool != null) {
-			builder.connectionPool(connectionPool);
-		} else {
-			builder.connectionPool(new ConnectionPool(0, 1, TimeUnit.SECONDS));
+		builder.connectionPool(Objects.requireNonNull(connectionPool));
+		return builder.build();
+	}
+
+	private OkHttpClient getClient() {
+		OkHttpClient localClient = client;
+		if (localClient == null) {
+			synchronized (this) {
+				localClient = client;
+				if (localClient == null) {
+					localClient = client = createClient();
+				}
+			}
+		}
+		return localClient;
+	}
+
+	private void appendHeaders(Request.Builder builder, Map<String, ?> headers) {
+		if (headers == null || headers.isEmpty()) {
+			return;
+		}
+		for (Entry<String, ?> entry : headers.entrySet()) {
+			builder.addHeader(entry.getKey(), FormatUtil.parseString(entry.getValue(), StringUtil.EMPTY));
+		}
+	}
+
+	private String getUrl(String url, Map<String, ?> params) {
+		if (params == null) {
+			return url;
+		}
+		StringBuilder urlBuf = new StringBuilder(url);
+		boolean appendQuestionMark = url.indexOf('?') < 0;
+		for (Entry<String, ?> entry : params.entrySet()) {
+			if (appendQuestionMark) {
+				urlBuf.append('?');
+				appendQuestionMark = false;
+			} else {
+				urlBuf.append('&');
+			}
+			try {
+				urlBuf.append(entry.getKey()).append('=')
+						.append(URLEncoder.encode(entry.getValue().toString(), StringUtil.UTF8));
+			} catch (UnsupportedEncodingException e) {
+				throw new UndeclaredThrowableException(e);
+			}
+		}
+		return urlBuf.toString();
+	}
+
+	private Request getRequestBuilder(String url, Map<String, ?> params, Map<String, ?> headers) {
+		Request.Builder builder = new Request.Builder().url(getUrl(url, params));
+		if (headers != null) {
+			for (Entry<String, ?> entry : headers.entrySet()) {
+				builder.addHeader(entry.getKey(), entry.getValue().toString());
+			}
 		}
 		return builder.build();
 	}
 
-	public void destroy() {
-		if (client == null) {
-			return;
+	private Response execute(Request request) throws IOException {
+		if (destroyed) {
+			throw new IOException("HttpClient already destroyed");
 		}
-		client.connectionPool().evictAll();
+		return getClient().newCall(request).execute();
+	}
+
+	private HttpTextResult executeAndGetTextResult(Request request) throws IOException {
+		Response response = null;
+		try {
+			response = execute(request);
+			return new HttpTextResult(response.code(), response.body().string(), response.headers());
+		} finally {
+			FileUtil.close(response);
+		}
 	}
 }
