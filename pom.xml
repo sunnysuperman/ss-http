@@ -65,6 +65,7 @@
 					<encoding>${project.build.sourceEncoding}</encoding>
 				</configuration>
 			</plugin>
+
 			<!-- skip test -->
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
@@ -72,6 +73,54 @@
 				<version>2.19</version>
 				<configuration>
 					<skipTests>true</skipTests>
+				</configuration>
+			</plugin>
+
+			<!-- format -->
+			<plugin>
+				<groupId>com.diffplug.spotless</groupId>
+				<artifactId>spotless-maven-plugin</artifactId>
+				<version>2.23.0</version>
+				<configuration>
+					<formats>
+						<format>
+							<includes>
+								<include>**/*.xml</include>
+							</includes>
+							<excludes>
+								<exclude>assets/**/*.xml</exclude>
+								<exclude>target/**/*.xml</exclude>
+							</excludes>
+							<eclipseWtp>
+								<type>XML</type>
+							</eclipseWtp>
+						</format>
+						<format>
+							<includes>
+								<include>**/*.json</include>
+							</includes>
+							<excludes>
+								<exclude>assets/**/*.json</exclude>
+								<exclude>target/**/*.json</exclude>
+							</excludes>
+							<eclipseWtp>
+								<type>JSON</type>
+							</eclipseWtp>
+						</format>
+					</formats>
+					<java>
+						<includes>
+							<include>**/*.java</include>
+						</includes>
+						<importOrder>
+							<order>java,javax,org,com,</order>
+						</importOrder>
+						<removeUnusedImports />
+						<eclipse>
+							<version>4.16.0</version>
+							<file>${user.dir}/assets/format/eclipse-java-style-buildin.xml</file>
+						</eclipse>
+					</java>
 				</configuration>
 			</plugin>
 		</plugins>
