@@ -36,6 +36,8 @@ import okhttp3.Response;
  **/
 public class HttpClient {
 	private static final HttpDownloadOptions DEFAULT_DOWNLOAD_OPTIONS = new HttpDownloadOptions();
+	private static final byte[] EMPTY = new byte[0];
+	private static final String CONTENT_TYPE_JSON = "application/json";
 
 	private int connectTimeout = 15;
 	private int readTimeout = 20;
@@ -141,14 +143,15 @@ public class HttpClient {
 		Request.Builder builder = new Request.Builder().url(url);
 		appendHeaders(builder, headers);
 
-		RequestBody requestBody = RequestBody.create(MediaType.parse(mediaType), body);
+		RequestBody requestBody = body == null ? RequestBody.create(null, EMPTY)
+				: RequestBody.create(MediaType.parse(mediaType), body);
 
 		Request request = builder.post(requestBody).build();
 		return executeAndGetTextResult(request);
 	}
 
 	public HttpTextResult postJSON(String url, String body, Map<String, ?> headers) throws IOException {
-		return post(url, "application/json", body, headers);
+		return post(url, CONTENT_TYPE_JSON, body, headers);
 	}
 
 	public HttpTextResult postMultipart(String url, Map<String, ?> body, Map<String, ?> headers) throws IOException {
