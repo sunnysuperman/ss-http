@@ -5,7 +5,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
-import java.lang.reflect.UndeclaredThrowableException;
 import java.net.Proxy;
 import java.net.URLEncoder;
 import java.util.HashMap;
@@ -15,12 +14,12 @@ import java.util.Map.Entry;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
+import com.sunnysuperman.commons.exception.UnexpectedException;
 import com.sunnysuperman.commons.util.FileUtil;
 import com.sunnysuperman.commons.util.FormatUtil;
 import com.sunnysuperman.commons.util.StringUtil;
 
 import okhttp3.Authenticator;
-import okhttp3.ConnectionPool;
 import okhttp3.FormBody;
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
@@ -36,12 +35,14 @@ import okhttp3.Response;
  **/
 public class HttpClient {
 	private static final HttpDownloadOptions DEFAULT_DOWNLOAD_OPTIONS = new HttpDownloadOptions();
+	private static final RequestOptions DEFAULT_REQUEST_OPTIONS = new RequestOptions();
 	private static final byte[] EMPTY = new byte[0];
 	private static final String CONTENT_TYPE_JSON = "application/json";
 
 	private int connectTimeout = 15;
 	private int readTimeout = 20;
-	private ConnectionPool connectionPool;
+	private boolean followRedirects = true;
+	private ConnectionPoolHolder connectionPool;
 	private Proxy proxy;
 	private Authenticator proxyAuthenticator;
 	private OkHttpClient client;
@@ -49,17 +50,16 @@ public class HttpClient {
 
 	public HttpClient(int maxIdleConnections, long keepAliveDuration) {
 		super();
-		this.connectionPool = new ConnectionPool(maxIdleConnections, keepAliveDuration, TimeUnit.SECONDS);
+		this.connectionPool = new ConnectionPoolHolder(maxIdleConnections, keepAliveDuration);
 	}
 
 	public HttpClient(int maxIdleConnections) {
 		this(maxIdleConnections, 50);
 	}
 
-	@Deprecated
-	public HttpClient(ConnectionPool connectionPool) {
+	public HttpClient(ConnectionPoolHolder connectionPool) {
 		super();
-		this.connectionPool = connectionPool;
+		this.connectionPool = Objects.requireNonNull(connectionPool);
 	}
 
 	public int getConnectTimeout() {
@@ -80,13 +80,17 @@ public class HttpClient {
 		return this;
 	}
 
-	public ConnectionPool getConnectionPool() {
-		return connectionPool;
+	public boolean isFollowRedirects() {
+		return followRedirects;
 	}
 
-	public HttpClient setConnectionPool(ConnectionPool connectionPool) {
-		this.connectionPool = connectionPool;
+	public HttpClient setFollowRedirects(boolean followRedirects) {
+		this.followRedirects = followRedirects;
 		return this;
+	}
+
+	public ConnectionPoolHolder getConnectionPool() {
+		return connectionPool;
 	}
 
 	public Proxy getProxy() {
@@ -115,48 +119,81 @@ public class HttpClient {
 		}
 	}
 
+	public HttpTextResult get(String url, Map<String, ?> params, RequestOptions options) throws IOException {
+		options = ensureRequestOptions(options);
+		Request request = getRequestBuilder(url, params, options.getHeaders()).build();
+		return executeAndGetTextResult(request, options);
+	}
+
 	public HttpTextResult get(String url, Map<String, ?> params, Map<String, ?> headers) throws IOException {
-		Request request = getRequestBuilder(url, params, headers);
-		return executeAndGetTextResult(request);
+		return get(url, params, headersAsOptions(headers));
+	}
+
+	public HttpTextResult get(String url, Map<String, ?> params) throws IOException {
+		return get(url, params, (RequestOptions) null);
 	}
 
 	public HttpTextResult get(String url) throws IOException {
-		return get(url, null, null);
+		return get(url, null, (RequestOptions) null);
 	}
 
-	public HttpTextResult post(String url, Map<String, ?> params, Map<String, ?> headers) throws IOException {
-		Request.Builder builder = new Request.Builder().url(url);
-		appendHeaders(builder, headers);
-
-		FormBody.Builder bodyBuilder = new FormBody.Builder();
-		if (params != null) {
-			for (Entry<String, ?> entry : params.entrySet()) {
-				bodyBuilder.add(entry.getKey(), FormatUtil.parseString(entry.getValue(), StringUtil.EMPTY));
-			}
-		}
-
-		Request request = builder.post(bodyBuilder.build()).build();
-		return executeAndGetTextResult(request);
-	}
-
-	public HttpTextResult post(String url, String mediaType, String body, Map<String, ?> headers) throws IOException {
-		Request.Builder builder = new Request.Builder().url(url);
-		appendHeaders(builder, headers);
+	public HttpTextResult post(String url, String mediaType, String body, RequestOptions options) throws IOException {
+		options = ensureRequestOptions(options);
+		Request.Builder builder = getRequestBuilder(url, null, options.getHeaders());
 
 		RequestBody requestBody = body == null ? RequestBody.create(null, EMPTY)
 				: RequestBody.create(MediaType.parse(mediaType), body);
 
 		Request request = builder.post(requestBody).build();
-		return executeAndGetTextResult(request);
+		return executeAndGetTextResult(request, options);
+	}
+
+	public HttpTextResult post(String url, String mediaType, String body) throws IOException {
+		return post(url, mediaType, body, (RequestOptions) null);
+	}
+
+	public HttpTextResult post(String url, String mediaType, String body, Map<String, ?> headers) throws IOException {
+		return post(url, mediaType, body, headersAsOptions(headers));
+	}
+
+	public HttpTextResult postForm(String url, Map<String, ?> formData, RequestOptions options) throws IOException {
+		options = ensureRequestOptions(options);
+		Request.Builder builder = getRequestBuilder(url, null, options.getHeaders());
+
+		FormBody.Builder bodyBuilder = new FormBody.Builder();
+		if (formData != null && !formData.isEmpty()) {
+			for (Entry<String, ?> entry : formData.entrySet()) {
+				bodyBuilder.add(entry.getKey(), FormatUtil.parseString(entry.getValue(), StringUtil.EMPTY));
+			}
+		}
+
+		Request request = builder.post(bodyBuilder.build()).build();
+		return executeAndGetTextResult(request, options);
+	}
+
+	public HttpTextResult postForm(String url, Map<String, ?> formData, Map<String, ?> headers) throws IOException {
+		return postForm(url, formData, headersAsOptions(headers));
+	}
+
+	public HttpTextResult postForm(String url, Map<String, ?> formData) throws IOException {
+		return postForm(url, formData, (RequestOptions) null);
+	}
+
+	public HttpTextResult postJSON(String url, String body, RequestOptions options) throws IOException {
+		return post(url, CONTENT_TYPE_JSON, body, options);
 	}
 
 	public HttpTextResult postJSON(String url, String body, Map<String, ?> headers) throws IOException {
 		return post(url, CONTENT_TYPE_JSON, body, headers);
 	}
 
-	public HttpTextResult postMultipart(String url, Map<String, ?> body, Map<String, ?> headers) throws IOException {
-		Request.Builder builder = new Request.Builder().url(url);
-		appendHeaders(builder, headers);
+	public HttpTextResult postJSON(String url, String body) throws IOException {
+		return post(url, CONTENT_TYPE_JSON, body, (RequestOptions) null);
+	}
+
+	public HttpTextResult postMultipart(String url, Map<String, ?> body, RequestOptions options) throws IOException {
+		options = ensureRequestOptions(options);
+		Request.Builder builder = getRequestBuilder(url, null, options.getHeaders());
 
 		MultipartBody.Builder bodyBuilder = new MultipartBody.Builder().setType(MultipartBody.FORM);
 		for (Entry<String, ?> entry : body.entrySet()) {
@@ -182,7 +219,15 @@ public class HttpClient {
 			}
 		}
 		Request request = builder.post(bodyBuilder.build()).build();
-		return executeAndGetTextResult(request);
+		return executeAndGetTextResult(request, options);
+	}
+
+	public HttpTextResult postMultipart(String url, Map<String, ?> body, Map<String, ?> headers) throws IOException {
+		return postMultipart(url, body, headersAsOptions(headers));
+	}
+
+	public HttpTextResult postMultipart(String url, Map<String, ?> body) throws IOException {
+		return postMultipart(url, body, (RequestOptions) null);
 	}
 
 	public boolean download(String url, OutputStream out) throws IOException {
@@ -193,7 +238,7 @@ public class HttpClient {
 		if (options == null) {
 			options = DEFAULT_DOWNLOAD_OPTIONS;
 		}
-		Request request = getRequestBuilder(url, options.getParams(), options.getHeaders());
+		Request request = getRequestBuilder(url, options.getParams(), options.getHeaders()).build();
 		Response response = null;
 		InputStream in = null;
 		try {
@@ -226,13 +271,7 @@ public class HttpClient {
 	}
 
 	public long getContentLength(String url, Map<String, ?> params, Map<String, ?> headers) throws IOException {
-		Request.Builder reqBuilder = new Request.Builder().url(getUrl(url, params));
-		if (headers != null) {
-			for (Entry<String, ?> entry : headers.entrySet()) {
-				reqBuilder.addHeader(entry.getKey(), entry.getValue().toString());
-			}
-		}
-		Request request = reqBuilder.head().build();
+		Request request = getRequestBuilder(url, params, headers).head().build();
 		Response response = null;
 		try {
 			response = execute(request);
@@ -243,11 +282,11 @@ public class HttpClient {
 	}
 
 	public int idleConnectionCount() {
-		return connectionPool.idleConnectionCount();
+		return connectionPool.get().idleConnectionCount();
 	}
 
 	public int connectionCount() {
-		return connectionPool.connectionCount();
+		return connectionPool.get().connectionCount();
 	}
 
 	private OkHttpClient createClient() {
@@ -259,7 +298,8 @@ public class HttpClient {
 		if (proxyAuthenticator != null) {
 			builder.proxyAuthenticator(proxyAuthenticator);
 		}
-		builder.connectionPool(Objects.requireNonNull(connectionPool));
+		builder.connectionPool(connectionPool.get());
+		builder.followRedirects(followRedirects);
 		return builder.build();
 	}
 
@@ -276,17 +316,16 @@ public class HttpClient {
 		return localClient;
 	}
 
-	private void appendHeaders(Request.Builder builder, Map<String, ?> headers) {
-		if (headers == null || headers.isEmpty()) {
-			return;
-		}
-		for (Entry<String, ?> entry : headers.entrySet()) {
-			builder.addHeader(entry.getKey(), FormatUtil.parseString(entry.getValue(), StringUtil.EMPTY));
-		}
+	private RequestOptions headersAsOptions(Map<String, ?> headers) {
+		return headers == null ? null : new RequestOptions().setHeaders(headers);
 	}
 
-	private String getUrl(String url, Map<String, ?> params) {
-		if (params == null) {
+	private RequestOptions ensureRequestOptions(RequestOptions options) {
+		return options == null ? DEFAULT_REQUEST_OPTIONS : options;
+	}
+
+	private String makeUrl(String url, Map<String, ?> params) {
+		if (params == null || params.isEmpty()) {
 			return url;
 		}
 		StringBuilder urlBuf = new StringBuilder(url);
@@ -298,24 +337,26 @@ public class HttpClient {
 			} else {
 				urlBuf.append('&');
 			}
-			try {
-				urlBuf.append(entry.getKey()).append('=')
-						.append(URLEncoder.encode(entry.getValue().toString(), StringUtil.UTF8));
-			} catch (UnsupportedEncodingException e) {
-				throw new UndeclaredThrowableException(e);
+			urlBuf.append(entry.getKey()).append('=');
+			if (entry.getValue() != null) {
+				try {
+					urlBuf.append(URLEncoder.encode(entry.getValue().toString(), StringUtil.UTF8));
+				} catch (UnsupportedEncodingException e) {
+					throw new UnexpectedException(e);
+				}
 			}
 		}
 		return urlBuf.toString();
 	}
 
-	private Request getRequestBuilder(String url, Map<String, ?> params, Map<String, ?> headers) {
-		Request.Builder builder = new Request.Builder().url(getUrl(url, params));
-		if (headers != null) {
+	private Request.Builder getRequestBuilder(String url, Map<String, ?> params, Map<String, ?> headers) {
+		Request.Builder builder = new Request.Builder().url(makeUrl(url, params));
+		if (headers != null && !headers.isEmpty()) {
 			for (Entry<String, ?> entry : headers.entrySet()) {
-				builder.addHeader(entry.getKey(), entry.getValue().toString());
+				builder.addHeader(entry.getKey(), FormatUtil.parseString(entry.getValue(), StringUtil.EMPTY));
 			}
 		}
-		return builder.build();
+		return builder;
 	}
 
 	private Response execute(Request request) throws IOException {
@@ -325,11 +366,14 @@ public class HttpClient {
 		return getClient().newCall(request).execute();
 	}
 
-	private HttpTextResult executeAndGetTextResult(Request request) throws IOException {
+	private HttpTextResult executeAndGetTextResult(Request request, RequestOptions options) throws IOException {
 		Response response = null;
 		try {
 			response = execute(request);
-			return new HttpTextResult(response.code(), response.body().string(), response.headers());
+			return new HttpTextResult(response.code(), response.body().string(), response.headers(),
+					options.isRetainPriorResponseHeaders() && response.priorResponse() != null
+							? response.priorResponse().headers()
+							: null);
 		} finally {
 			FileUtil.close(response);
 		}

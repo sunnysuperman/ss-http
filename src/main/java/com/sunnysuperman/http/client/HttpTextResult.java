@@ -9,13 +9,16 @@ public class HttpTextResult {
 	private int code;
 	private String body;
 	private Headers headers;
-	private Map<String, List<String>> headersMap;
+	private Headers priorHeaders;
+	private Map<String, List<String>> headerMap;
+	private Map<String, List<String>> priorHeaderMap;
 
-	public HttpTextResult(int code, String body, Headers headers) {
+	public HttpTextResult(int code, String body, Headers headers, Headers priorHeaders) {
 		super();
 		this.code = code;
 		this.body = body;
 		this.headers = headers;
+		this.priorHeaders = priorHeaders;
 	}
 
 	public boolean ok() {
@@ -23,14 +26,25 @@ public class HttpTextResult {
 	}
 
 	public String getHeader(String name) {
-		return headers.get(name);
+		return headers == null ? null : headers.get(name);
+	}
+
+	public String getPriorHeader(String name) {
+		return priorHeaders == null ? null : priorHeaders.get(name);
 	}
 
 	public Map<String, List<String>> getHeaders() {
-		if (headersMap == null) {
-			headersMap = headers.toMultimap();
+		if (headerMap == null) {
+			headerMap = headers == null ? null : headers.toMultimap();
 		}
-		return headersMap;
+		return headerMap;
+	}
+
+	public Map<String, List<String>> getPriorHeaders() {
+		if (priorHeaderMap == null) {
+			priorHeaderMap = priorHeaders == null ? null : priorHeaders.toMultimap();
+		}
+		return priorHeaderMap;
 	}
 
 	public int getCode() {
